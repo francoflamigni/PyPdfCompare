@@ -4,6 +4,8 @@ import logging
 import fitz  # PyMuPDF
 import re
 
+from smart_segmentation import PDFTextSegmenter
+
 
 class PDFTextExtractor:
     """Classe per l'estrazione ottimizzata di testo dai PDF per il confronto"""
@@ -148,14 +150,13 @@ class PDFComparator:
                 #h =  abs(hash(t))
                 l = {
                     'txt': t,
-                    #'hash': h,
                     'page': page_num
                 }
                 doc.append(l)
 
         return doc
 
-    def find_closest_string(self, vs, s):
+    def find_closest_string(self, vs, s, j0):
         """
         Trova l'indice della stringa in un vettore che è più simile a una stringa di riferimento.
 
@@ -173,41 +174,45 @@ class PDFComparator:
         closest_index = None
 
         # Itera sul vettore per trovare la stringa con il punteggio di similitudine più alto
-        for vector_string in vs:
+        for i, vector_string in enumerate(vs[j0:], start=j0):
             # Utilizza SequenceMatcher per calcolare la similitudine
-            s2 = vector_string['txt']
+            s2 = vector_string['text']
             matcher = SequenceMatcher(None, s, s2)
             similarity_ratio = matcher.ratio()
 
             if similarity_ratio > max_similarity and similarity_ratio > self.similarity_threshold:
                 max_similarity = similarity_ratio
-                closest_index = vector_string
+                closest_index = i
+                break
 
         return closest_index, max_similarity
 
     def match_lines(self, pages_text1, pages_text2):
-        doc1 = self.get_lines(pages_text1)
-        doc2 = self.get_lines(pages_text2)
+        #doc1 = self.get_lines(pages_text1)
+        #doc2 = self.get_lines(pages_text2)
 
         matches = []
-        for l in doc1:
+        j0 = 0
+        for i, l in enumerate(pages_text1):
             try:
-                l2, score = self.find_closest_string(doc2, l['txt'])
-                if l2 is not None:
+                j, score = self.find_closest_string(pages_text2, l['text'], j0)
+                if j is not None:
                     matches.append({
-                        'txt1': l['txt'],
-                        'pgdoc1': l['page'],
-                        'txt2': l2['txt'],
-                        'pgdoc2': l2['page'],
+                        'doc1': i,
+                        'doc2': j,
                         'score': score
                     }
                     )
+                    if score > 0.93:
+                        j0 = j + 1
+                else:
+                    a = 0
             except Exception as e:
                 b = 0
             a1 = 0
 
 
-        a = 0
+        return matches
 
     def create_semantic_blocks(self, pages_text: List[str]) -> List[Dict]:
         """
@@ -522,8 +527,9 @@ def compare_pdf_files(pdf_path1: str, pdf_path2: str,
     """
     # Estrai testo da entrambi i PDF
 
+    '''
     pe = PDFTextExtractor()
-    pe.extract_text_for_comparison(pdf_path1)
+    qq = pe.extract_text_for_comparison(pdf_path1)
 
     pages_text1, success1 = extract_pdf_text(pdf_path1)
     pages_text2, success2 = extract_pdf_text(pdf_path2)
@@ -533,12 +539,19 @@ def compare_pdf_files(pdf_path1: str, pdf_path2: str,
         return {'status': 'error', 'error': f'Impossibile estrarre testo da {pdf_path1}'}
     if not success2:
         return {'status': 'error', 'error': f'Impossibile estrarre testo da {pdf_path2}'}
+    '''
 
     # Confronta
+    segmenter = PDFTextSegmenter()
+    pages_text1 = segmenter.process_pdf(pdf_path1)
+    pages_text2 = segmenter.process_pdf(pdf_path2)
+
     comparator = PDFComparator(similarity_threshold)
-    comparator.match_lines(pages_text1, pages_text2)
+    result = comparator.match_lines(pages_text1, pages_text2)
+    return result, pages_text1, pages_text2
 
 
+    '''
     result = comparator.compare_pdfs(pages_text1, pages_text2)
 
     # Aggiungi informazioni sui file
@@ -550,6 +563,7 @@ def compare_pdf_files(pdf_path1: str, pdf_path2: str,
     }
 
     return result
+    '''
 
 
 def compare_pdf_texts(pages_text1: List[str], pages_text2: List[str],

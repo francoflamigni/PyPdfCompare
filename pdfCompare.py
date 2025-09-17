@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import List, Tuple, Optional, Dict
 from pathlib import Path
 import difflib
-from smart_compare import compare_pdf_files
+from smart_compare import compare_pdf_texts, extract_pdf_text, compare_pdf_files
 
 import fitz  # PyMuPDF
 from PyQt6.QtWidgets import (
@@ -86,7 +86,7 @@ class PDFRenderer(QWidget):
         super().__init__()
         self.setup_ui()
         self.current_page = 0
-        self.zoom_level = 1.0
+        self.zoom_level = 0.75
         self.pdf_doc = None
 
     def setup_ui(self):
@@ -371,41 +371,45 @@ class ComparisonWorker(QThread):
     def run(self):
         try:
             # Estrai testo dai PDF
-            '''
             self.progress_updated.emit(10)
-            pages_text1, layout1_pages = extract_pdf_f(self.pdf1_path)
+            #pages_text1, layout1_pages = extract_pdf_text(self.pdf1_path)
 
             self.progress_updated.emit(30)
-            pages_text2, layout2_pages = extract_pdf_text(self.pdf2_path)
+            #pages_text2, layout2_pages = extract_pdf_text(self.pdf2_path)
 
             self.progress_updated.emit(50)
 
-            '''
             # Confronta i testi
-            result = compare_pdf_files(self.pdf1_path, self.pdf2_path, similarity_threshold=0.7)
+            #result = compare_pdf_texts(pages_text1, pages_text2, similarity_threshold=0.7)
+            result, t1, t2 = compare_pdf_files(self.pdf1_path, self.pdf2_path, similarity_threshold=0.7)
+            a = 0
 
             # Accedi ai risultati
+            '''
             print(f"Blocchi abbinati: {result['matched_blocks']}")
             print(f"Blocchi modificati: {result['modified_blocks']}")
             print(f"Blocchi aggiunti: {result['added_blocks']}")
             print(f"Blocchi eliminati: {result['deleted_blocks']}")
+            '''
 
+            '''
             # Dettagli delle differenze
             for diff in result['differences']:
                 print(f"Differenza: {diff['summary']}")
 
-            '''
+
             # Confronta le pagine con allineamento intelligente
-            differences = self.compare_pages_smart(text1_pages, text2_pages)
+            differences = self.compare_pages_smart(pages_text1, pages_text2)
 
             self.progress_updated.emit(90)
 
             # Salva il log
             self.save_comparison_log(differences)
+            '''
 
             self.progress_updated.emit(100)
-            self.comparison_complete.emit(differences)
-            '''
+            #self.comparison_complete.emit(differences)
+
 
         except Exception as e:
             self.error_occurred.emit(str(e))
@@ -599,6 +603,12 @@ class EnhancedDiffViewer(QWidget):
             lambda v: left_scroll.setValue(v) if self.sync_scroll_cb.isChecked() else None
         )
 
+    def print_left(self, txt):
+        self.left_text.append(txt)
+
+    def print_right(self, txt):
+        self.right_text.append(txt)
+
     def toggle_sync_scroll(self, enabled: bool):
         """Attiva/disattiva la sincronizzazione dello scroll"""
         # La sincronizzazione è già gestita nel setup_scroll_sync
@@ -708,6 +718,13 @@ class EnhancedDiffViewer(QWidget):
             self.current_page_index += 1
             self.update_difference_display()
             self.update_navigation()
+
+    def show_pdf(self, pdf, pos):
+        if pos == 0:
+            self.pdf_viewer1.load_pdf(pdf)
+        else:
+            self.pdf_viewer2.load_pdf(pdf)
+
 
 
 class ConfigWidget(QWidget):
@@ -966,6 +983,11 @@ class PDFCompareApp(QMainWindow):
         )
         if file_path:
             line_edit.setText(file_path)
+            if line_edit == self.pdf1_path:
+                self.diff_viewer.show_pdf(file_path, 0)
+            else:
+                self.diff_viewer.show_pdf(file_path, 1)
+
 
     def clear_files(self):
         """Pulisce i campi di selezione file"""
@@ -999,6 +1021,19 @@ class PDFCompareApp(QMainWindow):
         self.progress_bar.setValue(0)
         self.statusBar().showMessage("🔄 Confronto in corso...")
 
+        self.tab_widget.setCurrentIndex(1)
+        self.result, txt1, txt2 = compare_pdf_files(pdf1, pdf2)
+        for r in self.result:
+            t1 = txt1[r['doc1']]['text']
+            t2 = txt2[r['doc2']]['text']
+            score = r['score']
+            self.diff_viewer.print_left(f'score {score:.2f}  {t1}')
+            self.diff_viewer.print_right(f'{t2} ')
+
+        a = 0
+        #self.diff_viewer.load_pdf(pdf1)
+
+        '''
         # Avvia il worker thread
         config = self.config_widget.get_config()
         self.worker = ComparisonWorker(pdf1, pdf2, config)
@@ -1006,6 +1041,7 @@ class PDFCompareApp(QMainWindow):
         self.worker.comparison_complete.connect(self.on_comparison_complete)
         self.worker.error_occurred.connect(self.on_error)
         self.worker.start()
+        '''
 
     def on_comparison_complete(self, differences: List[dict]):
         """Gestisce il completamento del confronto"""
@@ -1016,7 +1052,7 @@ class PDFCompareApp(QMainWindow):
         pdf2_path = self.pdf2_path.text()
 
         # Mostra i risultati nel viewer avanzato
-        self.diff_viewer.show_differences(differences, pdf1_path, pdf2_path)
+        #self.diff_viewer.show_differences(differences, pdf1_path, pdf2_path)
         self.tab_widget.setCurrentIndex(1)  # Passa al tab risultati
 
         # Aggiorna status bar
