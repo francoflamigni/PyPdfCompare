@@ -525,27 +525,13 @@ def compare_pdf_files(pdf_path1: str, pdf_path2: str,
     Returns:
         Dizionario con risultati del confronto
     """
+
     # Estrai testo da entrambi i PDF
-
-    '''
-    pe = PDFTextExtractor()
-    qq = pe.extract_text_for_comparison(pdf_path1)
-
-    pages_text1, success1 = extract_pdf_text(pdf_path1)
-    pages_text2, success2 = extract_pdf_text(pdf_path2)
-
-
-    if not success1:
-        return {'status': 'error', 'error': f'Impossibile estrarre testo da {pdf_path1}'}
-    if not success2:
-        return {'status': 'error', 'error': f'Impossibile estrarre testo da {pdf_path2}'}
-    '''
-
-    # Confronta
     segmenter = PDFTextSegmenter()
     pages_text1 = segmenter.process_pdf(pdf_path1)
     pages_text2 = segmenter.process_pdf(pdf_path2)
 
+    # Confronta
     comparator = PDFComparator(similarity_threshold)
     result = comparator.match_lines(pages_text1, pages_text2)
     return result, pages_text1, pages_text2

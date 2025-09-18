@@ -5,11 +5,10 @@ import json
 import logging
 from datetime import datetime
 from typing import List, Tuple, Optional, Dict
-from pathlib import Path
 import difflib
+import fitz
 from smart_compare import compare_pdf_texts, extract_pdf_text, compare_pdf_files
 
-import fitz  # PyMuPDF
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QTextEdit, QFileDialog,
@@ -20,6 +19,35 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QRectF
 from PyQt6.QtGui import (QFont, QTextCharFormat, QColor, QPixmap, QPainter,
                          QTextCursor, QTextDocument, QSyntaxHighlighter, QTextFormat)
+
+from config import ConfigWidget
+from smart_segmentation import PDFTextSegmenter
+
+
+def doc_page_count(path_file: str) -> int:
+    """
+    Restituisce il numero di pagine di un documento PDF.
+
+    Args:
+        path_file: Il percorso completo del file PDF.
+
+    Returns:
+        Il numero di pagine.
+    """
+    try:
+        # Aprire il documento
+        doc = fitz.open(path_file)
+        # Ottenere il numero di pagine
+        num_pagine = doc.page_count
+        # Chiudere il documento
+        doc.close()
+        return num_pagine
+    except fitz.FileNotFoundError:
+        print(f"Errore: Il file '{path_file}' non è stato trovato.")
+        return -1
+    except Exception as e:
+        print(f"Si è verificato un errore: {e}")
+        return -1
 
 
 class DiffBlock:
@@ -727,100 +755,6 @@ class EnhancedDiffViewer(QWidget):
 
 
 
-class ConfigWidget(QWidget):
-    """Widget per le configurazioni del confronto"""
-
-    def __init__(self):
-        super().__init__()
-        self.setup_ui()
-
-    def setup_ui(self):
-        layout = QVBoxLayout()
-
-        # Gruppo opzioni testo
-        text_group = QGroupBox("Opzioni Testo")
-        text_layout = QVBoxLayout()
-
-        self.ignore_case_cb = QCheckBox("Ignora maiuscole/minuscole")
-        self.normalize_spaces_cb = QCheckBox("Normalizza spazi multipli")
-        self.normalize_spaces_cb.setChecked(True)
-
-        text_layout.addWidget(self.ignore_case_cb)
-        text_layout.addWidget(self.normalize_spaces_cb)
-        text_group.setLayout(text_layout)
-
-        # Gruppo opzioni pagina
-        page_group = QGroupBox("Opzioni Pagina")
-        page_layout = QVBoxLayout()
-
-        self.ignore_headers_cb = QCheckBox("Ignora header")
-        self.ignore_footers_cb = QCheckBox("Ignora footer")
-        self.ignore_page_numbers_cb = QCheckBox("Ignora numeri di pagina")
-        self.ignore_special_chars_cb = QCheckBox("Ignora linee con solo caratteri speciali")
-
-        # Numero di linee per header/footer
-        header_layout = QHBoxLayout()
-        header_layout.addWidget(QLabel("Linee header:"))
-        self.header_lines_spin = QSpinBox()
-        self.header_lines_spin.setRange(1, 10)
-        self.header_lines_spin.setValue(3)
-        header_layout.addWidget(self.header_lines_spin)
-        header_layout.addStretch()
-
-        footer_layout = QHBoxLayout()
-        footer_layout.addWidget(QLabel("Linee footer:"))
-        self.footer_lines_spin = QSpinBox()
-        self.footer_lines_spin.setRange(1, 10)
-        self.footer_lines_spin.setValue(3)
-        footer_layout.addWidget(self.footer_lines_spin)
-        footer_layout.addStretch()
-
-        page_layout.addWidget(self.ignore_headers_cb)
-        page_layout.addLayout(header_layout)
-        page_layout.addWidget(self.ignore_footers_cb)
-        page_layout.addLayout(footer_layout)
-        page_layout.addWidget(self.ignore_page_numbers_cb)
-        page_layout.addWidget(self.ignore_special_chars_cb)
-        page_group.setLayout(page_layout)
-
-        # Gruppo opzioni visualizzazione
-        display_group = QGroupBox("Opzioni Visualizzazione")
-        display_layout = QVBoxLayout()
-
-        self.show_pdf_cb = QCheckBox("Mostra rendering PDF")
-        self.show_pdf_cb.setChecked(True)
-        self.highlight_diffs_cb = QCheckBox("Evidenzia differenze nel testo")
-        self.highlight_diffs_cb.setChecked(True)
-        self.sync_navigation_cb = QCheckBox("Sincronizza navigazione PDF")
-        self.sync_navigation_cb.setChecked(True)
-
-        display_layout.addWidget(self.show_pdf_cb)
-        display_layout.addWidget(self.highlight_diffs_cb)
-        display_layout.addWidget(self.sync_navigation_cb)
-        display_group.setLayout(display_layout)
-
-        layout.addWidget(text_group)
-        layout.addWidget(page_group)
-        layout.addWidget(display_group)
-        layout.addStretch()
-
-        self.setLayout(layout)
-
-    def get_config(self) -> dict:
-        """Restituisce la configurazione corrente"""
-        return {
-            'ignore_case': self.ignore_case_cb.isChecked(),
-            'normalize_spaces': self.normalize_spaces_cb.isChecked(),
-            'ignore_headers': self.ignore_headers_cb.isChecked(),
-            'ignore_footers': self.ignore_footers_cb.isChecked(),
-            'ignore_page_numbers': self.ignore_page_numbers_cb.isChecked(),
-            'ignore_special_chars': self.ignore_special_chars_cb.isChecked(),
-            'header_lines': self.header_lines_spin.value(),
-            'footer_lines': self.footer_lines_spin.value(),
-            'show_pdf': self.show_pdf_cb.isChecked(),
-            'highlight_diffs': self.highlight_diffs_cb.isChecked(),
-            'sync_navigation': self.sync_navigation_cb.isChecked()
-        }
 
 
 class PDFCompareApp(QMainWindow):
@@ -985,6 +919,9 @@ class PDFCompareApp(QMainWindow):
             line_edit.setText(file_path)
             if line_edit == self.pdf1_path:
                 self.diff_viewer.show_pdf(file_path, 0)
+                n_pages = doc_page_count(file_path)
+                if n_pages > 0:
+                    self.config_widget.sync_page_limits(1, n_pages)
             else:
                 self.diff_viewer.show_pdf(file_path, 1)
 
@@ -994,13 +931,28 @@ class PDFCompareApp(QMainWindow):
         self.pdf1_path.clear()
         self.pdf2_path.clear()
 
+    def extract_text(self, pdf_path):
+        from pdf_processor import interactive_extraction
+        #pdf1 = self.pdf1_path.text().strip()
+        #remove_footnotes_by_font_size(pdf_path, 'pippo.pdf')
+        #text = interactive_extraction(pdf_path)
+        segmenter = PDFTextSegmenter()
+        #pages_text = segmenter.process_txt(text, "poetry")
+        pages_block = segmenter.extract_text_blocks(pdf_path)
+        pages_text = [t['text'].replace('\n', ' ') for t in pages_block]
+        for t in pages_text:
+            self.diff_viewer.print_left(t)
+
     def start_comparison(self):
         """Avvia il confronto dei PDF"""
         pdf1 = self.pdf1_path.text().strip()
         pdf2 = self.pdf2_path.text().strip()
 
-        if not pdf1 or not pdf2:
+        if not pdf1 and not pdf2:
             QMessageBox.warning(self, "⚠️ Errore", "Seleziona entrambi i file PDF")
+            return
+        elif pdf1 and not pdf2:
+            self.extract_text(pdf1)
             return
 
         if not os.path.exists(pdf1) or not os.path.exists(pdf2):
@@ -1024,8 +976,8 @@ class PDFCompareApp(QMainWindow):
         self.tab_widget.setCurrentIndex(1)
         self.result, txt1, txt2 = compare_pdf_files(pdf1, pdf2)
         for r in self.result:
-            t1 = txt1[r['doc1']]['text']
-            t2 = txt2[r['doc2']]['text']
+            t1 = txt1[r['doc1']]['original']
+            t2 = txt2[r['doc2']]['original']
             score = r['score']
             self.diff_viewer.print_left(f'score {score:.2f}  {t1}')
             self.diff_viewer.print_right(f'{t2} ')
