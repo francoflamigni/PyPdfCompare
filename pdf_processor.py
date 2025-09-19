@@ -401,24 +401,278 @@ def interactive_extraction(pdf_path):
     return text
 
 
+'''
+********************************************************************
+'''
+
+import fitz  # PyMuPDF
+from collections import defaultdict
+import re
+
+
+def extract_text_lines_from_pdf(pdf_path, line_height_tolerance=2.0, y_overlap_threshold=0.5):
+    """
+    Estrae righe di testo da un PDF OCR, ricostruendo le righe anche quando
+    sono composte da più span o blocchi.
+
+    Args:
+        pdf_path (str): Percorso del file PDF
+        line_height_tolerance (float): Tolleranza per raggruppare span sulla stessa riga (punti)
+        y_overlap_threshold (float): Soglia di sovrapposizione verticale per considerare span sulla stessa riga
+
+    Returns:
+        list: Lista di dizionari con 'text', 'bbox', 'page' per ogni riga
+    """
+
+    def spans_on_same_line(span1, span2, tolerance=line_height_tolerance):
+        """
+        Determina se due span sono sulla stessa riga di testo
+        """
+        bbox1 = span1['bbox']
+        bbox2 = span2['bbox']
+
+        # Calcola l'altezza delle bbox
+        height1 = bbox1[3] - bbox1[1]
+        height2 = bbox2[3] - bbox2[1]
+
+        # Calcola l'overlap verticale
+        y_overlap = min(bbox1[3], bbox2[3]) - max(bbox1[1], bbox2[1])
+        min_height = min(height1, height2)
+
+        # Se c'è un overlap significativo o le bbox sono molto vicine verticalmente
+        overlap_ratio = y_overlap / min_height if min_height > 0 else 0
+        vertical_distance = abs((bbox1[1] + bbox1[3]) / 2 - (bbox2[1] + bbox2[3]) / 2)
+
+        return (overlap_ratio > y_overlap_threshold or
+                vertical_distance <= tolerance)
+
+    def merge_bbox(bbox1, bbox2):
+        """
+        Unisce due bounding box
+        """
+        return (
+            min(bbox1[0], bbox2[0]),  # x0
+            min(bbox1[1], bbox2[1]),  # y0
+            max(bbox1[2], bbox2[2]),  # x1
+            max(bbox1[3], bbox2[3])  # y1
+        )
+
+    def group_spans_into_lines(spans):
+        """
+        Raggruppa gli span in righe di testo
+        """
+        if not spans:
+            return []
+
+        # Ordina gli span per posizione verticale, poi orizzontale
+        sorted_spans = sorted(spans, key=lambda s: (s['bbox'][1], s['bbox'][0]))
+
+        lines = []
+        current_line_spans = [sorted_spans[0]]
+
+        for span in sorted_spans[1:]:
+            # Controlla se questo span appartiene alla riga corrente
+            belongs_to_current_line = False
+
+            for existing_span in current_line_spans:
+                if spans_on_same_line(span, existing_span):
+                    belongs_to_current_line = True
+                    break
+
+            if belongs_to_current_line:
+                current_line_spans.append(span)
+            else:
+                # Finalizza la riga corrente
+                if current_line_spans:
+                    lines.append(current_line_spans)
+                current_line_spans = [span]
+
+        # Aggiungi l'ultima riga
+        if current_line_spans:
+            lines.append(current_line_spans)
+
+        return lines
+
+    def create_line_from_spans(line_spans):
+        """
+        Crea una riga di testo da un gruppo di span
+        """
+        if not line_spans:
+            return None
+
+        # Ordina gli span per posizione orizzontale
+        sorted_spans = sorted(line_spans, key=lambda s: s['bbox'][0])
+
+        # Costruisci il testo della riga
+        text_parts = []
+        line_bbox = sorted_spans[0]['bbox']
+
+        prev_span_end = None
+
+        for i, span in enumerate(sorted_spans):
+            span_text = span['text'].strip()
+            span_bbox = span['bbox']
+
+            # Unisci le bounding box
+            line_bbox = merge_bbox(line_bbox, span_bbox)
+
+            if span_text:  # Solo se lo span ha del testo
+                # Aggiungi spazi tra span se necessario
+                if (prev_span_end is not None and
+                        span_bbox[0] > prev_span_end + 5):  # Gap di più di 5 punti
+                    text_parts.append(' ')
+
+                text_parts.append(span_text)
+                prev_span_end = span_bbox[2]
+
+        clean_parts = [part.strip() for part in text_parts if part.strip()]
+        text = ' '.join(clean_parts).strip()
+
+        if not text:  # Se non c'è testo significativo
+            return None
+
+        return {
+            'text': text,
+            'bbox': line_bbox,
+            'spans_count': len(line_spans)
+        }
+
+    # Inizializza il risultato
+    all_lines = []
+
+    try:
+        # Apri il documento PDF
+        doc = fitz.open(pdf_path)
+
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+
+            # Estrai il testo con informazioni dettagliate
+            text_dict = page.get_text("dict")
+
+            # Raccogli tutti gli span da tutti i blocchi
+            page_spans = []
+
+            for block in text_dict["blocks"]:
+                if "lines" in block:  # Blocco di testo
+                    for line in block["lines"]:
+                        for span in line["spans"]:
+                            if span["text"].strip():  # Solo span con testo
+                                page_spans.append({
+                                    'text': span["text"],
+                                    'bbox': span["bbox"],
+                                    'size': span["size"],
+                                    'font': span["font"]
+                                })
+
+            # Raggruppa gli span in righe
+            text_lines = group_spans_into_lines(page_spans)
+
+            # Converti ogni gruppo di span in una riga finale
+            for line_spans in text_lines:
+                line_data = create_line_from_spans(line_spans)
+                if line_data:
+                    all_lines.append({
+                        'text': line_data['text'],
+                        'bbox': line_data['bbox'],
+                        'page': page_num + 1  # Numerazione pagine da 1
+                    })
+
+        doc.close()
+
+    except Exception as e:
+        print(f"Errore nell'elaborazione del PDF: {e}")
+        return []
+
+    return all_lines
+
+
+def extract_text_lines_simple(pdf_path):
+    """
+    Versione semplificata che usa direttamente le righe già identificate da PyMuPDF
+    Utile per PDF con OCR di buona qualità
+    """
+    all_lines = []
+
+    try:
+        doc = fitz.open(pdf_path)
+
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            text_dict = page.get_text("dict")
+
+            for block in text_dict["blocks"]:
+                if "lines" in block:  # Blocco di testo
+                    for line in block["lines"]:
+                        # Combina tutti gli span della riga
+                        line_text_parts = []
+                        line_bbox = None
+
+                        for span in line["spans"]:
+                            span_text = span["text"].strip()
+                            if span_text:
+                                line_text_parts.append(span_text)
+
+                                # Calcola/aggiorna la bbox della riga
+                                if line_bbox is None:
+                                    line_bbox = list(span["bbox"])
+                                else:
+                                    line_bbox[0] = min(line_bbox[0], span["bbox"][0])  # x0
+                                    line_bbox[1] = min(line_bbox[1], span["bbox"][1])  # y0
+                                    line_bbox[2] = max(line_bbox[2], span["bbox"][2])  # x1
+                                    line_bbox[3] = max(line_bbox[3], span["bbox"][3])  # y1
+
+                        # Se la riga ha del testo
+                        if line_text_parts and line_bbox:
+                            combined_text = ' '.join(line_text_parts).strip()
+                            if combined_text:
+                                all_lines.append({
+                                    'text': combined_text,
+                                    'bbox': tuple(line_bbox),
+                                    'page': page_num + 1
+                                })
+
+        doc.close()
+
+    except Exception as e:
+        print(f"Errore nell'elaborazione del PDF: {e}")
+        return []
+
+    return all_lines
+
+
+def print_text_lines_sample(text_lines, max_lines=10):
+    """
+    Stampa un campione delle righe estratte per verifica
+    """
+    print(f"Estratte {len(text_lines)} righe di testo totali")
+    print(f"Prime {min(max_lines, len(text_lines))} righe:\n")
+
+    for i, line in enumerate(text_lines[:max_lines]):
+        bbox = line['bbox']
+        print(f"Riga {i + 1} (Pagina {line['page']}):")
+        print(f"  Testo: '{line['text'][:100]}{'...' if len(line['text']) > 100 else ''}'")
+        print(f"  BBox: ({bbox[0]:.1f}, {bbox[1]:.1f}, {bbox[2]:.1f}, {bbox[3]:.1f})")
+        print()
+
+
 # Esempio di utilizzo
-if __name__ == "__main__":
-    # Percorso del PDF - modifica questo!
-    pdf_file = "1769-mytest.pdf"  # Il tuo file
+def proc_pdf(pdf_path):
+    # Percorso del PDF da analizzare
+    #pdf_path = "example.pdf"  # Sostituisci con il tuo percorso
 
-    # Modalità interattiva
-    text = interactive_extraction(pdf_file)
+    print("Metodo avanzato (ricostruzione righe):")
+    lines_advanced = extract_text_lines_from_pdf(pdf_path)
+    return lines_advanced
+    print_text_lines_sample(lines_advanced)
 
-    # Esempi di uso diretto:
+    print("\n" + "=" * 50 + "\n")
 
-    # Estrazione robusta con parametri specifici
-    # text = extract_text_without_footnotes_robust(
-    #     pdf_file,
-    #     min_font_size=11.0,
-    #     position_threshold=0.85,
-    #     save_to_file="testo_pulito.txt",
-    #     remove_line_numbers=True
-    # )
+    print("Metodo semplice (righe PyMuPDF):")
+    lines_simple = extract_text_lines_simple(pdf_path)
+    print_text_lines_sample(lines_simple)
 
-    # Estrazione basata su pattern (alternativa)
-    # text = extract_text_by_patterns(pdf_file, save_to_file="testo_pattern.txt")
+    # Esempio di come salvare i risultati
+    # import json
+    # with open('extracted_lines.json', 'w', encoding='utf-8') as f:
+    #     json.dump(lines_advanced, f, ensure_ascii=False, indent=2)

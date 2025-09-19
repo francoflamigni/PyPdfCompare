@@ -18,10 +18,97 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QRectF
 from PyQt6.QtGui import (QFont, QTextCharFormat, QColor, QPixmap, QPainter,
-                         QTextCursor, QTextDocument, QSyntaxHighlighter, QTextFormat)
+                         QTextCursor, QTextDocument, QSyntaxHighlighter, QTextFormat, QMouseEvent)
 
 from config import ConfigWidget
 from smart_segmentation import PDFTextSegmenter
+from pdf_viewer import PDFViewer
+
+
+class CustomTextEdit(QTextEdit):
+    lineClicked = pyqtSignal(int)
+    def __init__(self, parent=None):
+        super().__init__(parent)
+       # self.setPlainText("Riga 1\nRiga 2\nRiga 3\nRiga 4\nRiga 5")
+
+    def mousePressEvent(self, event: QMouseEvent):
+        # Chiama il metodo originale per mantenere il comportamento predefinito
+        super().mousePressEvent(event)
+
+        # Pulisce l'evidenziazione precedente se esiste
+        self.clear_highlight()
+
+        # Ottiene il cursore del testo nella posizione del clic
+        cursor = self.cursorForPosition(event.pos())
+
+        # Ottiene il numero del blocco (che corrisponde al numero della riga)
+        line_number = cursor.blockNumber()
+
+        # Evidenzia la nuova riga
+        self.highlight_line(cursor)
+        self.lineClicked.emit(line_number)
+
+        # Stampa il numero della riga (i blocchi sono indicizzati da 0)
+        print(f"Hai cliccato sulla riga: {line_number + 1}")
+
+    def highlight_and_scroll_to_line(self, line_number: int):
+        self.clear_highlight()
+        """
+        Scorre la QTextEdit fino alla riga specificata e la evidenzia.
+
+        Args:
+            line_number (int): Il numero della riga da visualizzare (base 1).
+        """
+        # 1. Pulire qualsiasi evidenziazione precedente
+        # Se hai una funzione per pulire l'evidenziazione, è meglio chiamarla qui.
+        # Ad esempio: self.clear_highlight()
+
+        # 2. Spostare il cursore alla riga desiderata
+        cursor = self.textCursor()
+
+        # Il numero del blocco è a base 0, quindi sottraiamo 1
+        target_block_number = line_number - 1
+
+        # Sposta il cursore al blocco (riga) specificato
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        cursor.movePosition(QTextCursor.MoveOperation.NextBlock,
+                            QTextCursor.MoveMode.MoveAnchor,
+                            target_block_number)
+
+        # 3. Rendere il cursore visibile (scorrere la vista)
+        self.setTextCursor(cursor)
+        self.ensureCursorVisible()
+
+        # 4. Evidenziare la riga corrente
+        # Crea un formato per lo sfondo
+        format = QTextCharFormat()
+        format.setBackground(QColor("#d9eaff"))  # Un colore azzurro chiaro
+
+        # Seleziona l'intera riga
+        cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+
+        # Applica il formato
+        cursor.setCharFormat(format)
+
+    def clear_highlight(self):
+        # Resetta il formato di tutte le righe
+        cursor = self.textCursor()
+        cursor.select(QTextCursor.SelectionType.Document)
+        format = QTextCharFormat()
+        format.setBackground(QColor("transparent"))
+        cursor.mergeCharFormat(format)
+
+    def highlight_line(self, cursor: QTextCursor):
+        # Salva la posizione attuale per poterla ripulire successivamente
+        self.current_highlight_cursor = QTextCursor(cursor)
+
+        # Prepara il formato per l'evidenziazione
+        format = QTextCharFormat()
+        format.setBackground(QColor("#d9eaff"))  # Un colore azzurro chiaro
+
+        # Seleziona l'intera riga e applica il formato
+        cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+        cursor.setCharFormat(format)
 
 
 def doc_page_count(path_file: str) -> int:
@@ -505,10 +592,12 @@ class ComparisonWorker(QThread):
 
 
 class EnhancedDiffViewer(QWidget):
+    diffEvent = pyqtSignal(str, int)
+    diffEvent = pyqtSignal(str, int, int, int)
     """Widget avanzato per visualizzare le differenze con PDF rendering e allineamento"""
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent):
+        super().__init__(parent)
         self.setup_ui()
         self.current_differences = []
         self.current_page_index = 0
@@ -538,7 +627,8 @@ class EnhancedDiffViewer(QWidget):
         pdf_layout = QHBoxLayout(pdf_widget)
 
         pdf_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.pdf_viewer1 = PDFRenderer()
+        self.pdf_viewer1 = PDFViewer()
+        self.pdf_viewer1.mouse_click.connect(self.mouse_click)
         self.pdf_viewer2 = PDFRenderer()
 
         pdf_frame1 = QFrame()
@@ -576,7 +666,8 @@ class EnhancedDiffViewer(QWidget):
         left_layout = QVBoxLayout(left_frame)
         self.left_text_label = QLabel("Testo PDF 1 (Allineato)")
         self.left_text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.left_text = QTextEdit()
+        self.left_text = CustomTextEdit()
+        self.left_text.lineClicked.connect(self.left_text_clicked)
         self.left_text.setReadOnly(True)
         self.left_text.setFont(QFont("Courier", 10))  # Font monospace
         left_layout.addWidget(self.left_text_label)
@@ -618,6 +709,12 @@ class EnhancedDiffViewer(QWidget):
 
         # Sincronizza scroll di default
         self.setup_scroll_sync()
+
+    def left_text_clicked(self, line):
+        self.diffEvent.emit('1', line, 0, 0)
+
+    def mouse_click(self, x, y, page):
+        self.diffEvent.emit('2', x, y, page)
 
     def setup_scroll_sync(self):
         """Configura la sincronizzazione dello scroll"""
@@ -798,7 +895,8 @@ class PDFCompareApp(QMainWindow):
         self.tab_widget.addTab(self.config_widget, "⚙️ Configurazione")
 
         # Tab risultati avanzato
-        self.diff_viewer = EnhancedDiffViewer()
+        self.diff_viewer = EnhancedDiffViewer(self)
+        self.diff_viewer.diffEvent.connect(self.diff_event)
         self.tab_widget.addTab(self.diff_viewer, "📊 Risultati Side-by-Side")
 
         main_layout.addWidget(self.tab_widget)
@@ -910,6 +1008,7 @@ class PDFCompareApp(QMainWindow):
         group.setLayout(layout)
         return group
 
+
     def browse_file(self, line_edit: QLineEdit):
         """Apre il dialog per selezionare un file PDF"""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -925,21 +1024,44 @@ class PDFCompareApp(QMainWindow):
             else:
                 self.diff_viewer.show_pdf(file_path, 1)
 
+    def diff_event(self, ev, a1, a2, a3):
+        if ev == '1':
+            l = self.pages_block[a1]
+            test_bbox = l['bbox']
+            current_page = l['page'] -1# (x0, y0, x1, y1)
+            test_color = QColor(255, 255, 0, 100)  # Giallo trasparente
+            self.diff_viewer.pdf_viewer1.highlight_text_line(current_page, test_bbox, test_color)
+        elif ev == '2':
+            if self.pages_block:
+                page = a3 + 1
+                for i, l in enumerate(self.pages_block):
+                    if l['page'] == page:
+                        if l['bbox'][1] <= a2 and l['bbox'][3] >= a2:
+                            self.diff_viewer.left_text.highlight_and_scroll_to_line(i+1)
+
+        a = 0
 
     def clear_files(self):
         """Pulisce i campi di selezione file"""
         self.pdf1_path.clear()
         self.pdf2_path.clear()
+        self.diff_viewer.pdf_viewer1.unload_pdf()
+        self.diff_viewer.left_text.clear()
+        self.pages_block = None
 
     def extract_text(self, pdf_path):
         from pdf_processor import interactive_extraction
         #pdf1 = self.pdf1_path.text().strip()
         #remove_footnotes_by_font_size(pdf_path, 'pippo.pdf')
         #text = interactive_extraction(pdf_path)
-        segmenter = PDFTextSegmenter()
+        from pdf_processor import proc_pdf
+        self.pages_block = proc_pdf(pdf_path)
+        # Esempio di utilizzo
+
+        #segmenter = PDFTextSegmenter()
         #pages_text = segmenter.process_txt(text, "poetry")
-        pages_block = segmenter.extract_text_blocks(pdf_path)
-        pages_text = [t['text'].replace('\n', ' ') for t in pages_block]
+        #self.pages_block = segmenter.extract_text_blocks(pdf_path)
+        pages_text = [t['text'].replace('\n', ' ') for t in self.pages_block]
         for t in pages_text:
             self.diff_viewer.print_left(t)
 

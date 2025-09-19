@@ -3,3 +3,4 @@ pyinstaller-hooks-contrib
 setuptools
 pyqt6
 pymupdf
+numpy
