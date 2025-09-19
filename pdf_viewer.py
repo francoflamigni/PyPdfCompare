@@ -218,9 +218,9 @@ class PDFViewer(QWidget):
         y_scroll_bar = self.scroll_area.verticalScrollBar().value()
 
         # 3. Calcola la coordinata Y del documento
-        y_documento = (y / self.zoom_factor) + y_scroll_bar
+        y_documento = int((y / self.zoom_factor))
 
-        self.mouse_click.emit(x, y, self.current_page)
+        self.mouse_click.emit(x, y_documento, self.current_page)
 
     def open_pdf(self):
         """Apre un file PDF"""
