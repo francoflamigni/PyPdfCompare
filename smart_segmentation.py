@@ -329,6 +329,7 @@ class PDFTextSegmenter:
                         })
 
         doc.close()
+        return text_blocks
         v = []
         current = -1
         sp = []

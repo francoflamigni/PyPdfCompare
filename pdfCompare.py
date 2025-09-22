@@ -404,6 +404,7 @@ class PDFCompareApp(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        self.pages_block = None
         self.setup_ui()
         self.setup_logging()
 
@@ -570,6 +571,8 @@ class PDFCompareApp(QMainWindow):
                 self.diff_viewer.show_pdf(file_path, 1)
 
     def diff_event(self, ev, a1, a2, a3):
+        if not self.pages_block:
+            return
         if ev == '1':
             l = self.pages_block[a1]
             test_bbox = l['bbox']
@@ -611,6 +614,7 @@ class PDFCompareApp(QMainWindow):
         """Avvia il confronto dei PDF"""
         pdf1 = self.pdf1_path.text().strip()
         pdf2 = self.pdf2_path.text().strip()
+        self.tab_widget.setCurrentIndex(1)
 
         if not pdf1 and not pdf2:
             QMessageBox.warning(self, "⚠️ Errore", "Seleziona entrambi i file PDF")
@@ -641,8 +645,8 @@ class PDFCompareApp(QMainWindow):
         self.tab_widget.setCurrentIndex(1)
         self.result, txt1, txt2 = compare_pdf_files(pdf1, pdf2)
         for r in self.result:
-            t1 = txt1[r['doc1']]['original']
-            t2 = txt2[r['doc2']]['original']
+            t1 = txt1[r['doc1']]['text']
+            t2 = txt2[r['doc2']]['text']
             score = r['score']
             self.diff_viewer.print_left(f'score {score:.2f}  {t1}')
             self.diff_viewer.print_right(f'{t2} ')

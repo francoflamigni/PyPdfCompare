@@ -176,7 +176,7 @@ class PDFComparator:
         # Itera sul vettore per trovare la stringa con il punteggio di similitudine più alto
         for i, vector_string in enumerate(vs[j0:], start=j0):
             # Utilizza SequenceMatcher per calcolare la similitudine
-            s2 = vector_string['text']
+            s2 = vector_string['normalized']
             matcher = SequenceMatcher(None, s, s2)
             similarity_ratio = matcher.ratio()
 
@@ -195,12 +195,13 @@ class PDFComparator:
         j0 = 0
         for i, l in enumerate(pages_text1):
             try:
-                j, score = self.find_closest_string(pages_text2, l['text'], j0)
+                j, score = self.find_closest_string(pages_text2, l['normalized'], j0)
                 if j is not None:
                     matches.append({
                         'doc1': i,
                         'doc2': j,
-                        'score': score
+                        'score': score,
+                        'diff': self.get_detailed_differences(l['normalized'], pages_text2[j]['normalized'])
                     }
                     )
                     if score > 0.93:
@@ -526,30 +527,24 @@ def compare_pdf_files(pdf_path1: str, pdf_path2: str,
         Dizionario con risultati del confronto
     """
 
+    from pdf_processor import extract_text_lines_from_pdf, normalize_blocks, remove_notes
+    pages_text1a = extract_text_lines_from_pdf(pdf_path1)
+    pages_text1b = remove_notes(pages_text1a)
+    pages_text1c = normalize_blocks(pages_text1b)
+
+    pages_text2a = extract_text_lines_from_pdf(pdf_path2)
+    pages_text2b = remove_notes(pages_text2a)
+    pages_text2c = normalize_blocks(pages_text2b)
+
     # Estrai testo da entrambi i PDF
-    segmenter = PDFTextSegmenter()
-    pages_text1 = segmenter.process_pdf(pdf_path1)
-    pages_text2 = segmenter.process_pdf(pdf_path2)
+    #segmenter = PDFTextSegmenter()
+    #pages_text1 = segmenter.process_pdf(pdf_path1, 'poetry')
+    #pages_text2 = segmenter.process_pdf(pdf_path2, 'poetry')
 
     # Confronta
     comparator = PDFComparator(similarity_threshold)
-    result = comparator.match_lines(pages_text1, pages_text2)
-    return result, pages_text1, pages_text2
-
-
-    '''
-    result = comparator.compare_pdfs(pages_text1, pages_text2)
-
-    # Aggiungi informazioni sui file
-    result['files'] = {
-        'pdf1': pdf_path1,
-        'pdf2': pdf_path2,
-        'pdf1_pages': len(pages_text1),
-        'pdf2_pages': len(pages_text2)
-    }
-
-    return result
-    '''
+    result = comparator.match_lines(pages_text1c, pages_text2c)
+    return result, pages_text1c, pages_text2c
 
 
 def compare_pdf_texts(pages_text1: List[str], pages_text2: List[str],

@@ -180,6 +180,23 @@ def extract_text_lines_from_pdf(pdf_path, line_height_tolerance=2.0, y_overlap_t
 
     return all_lines
 
+def normalize_text(text: str) -> str:
+    """
+    Normalizza il testo per il confronto
+    """
+    import re
+    # Rimuovi spazi multipli e normalizza
+    text = re.sub(r'\s+', ' ', text.strip())
+    # Rimuovi punteggiatura per confronto più flessibile
+    text = re.sub(r'[^\w\s]', '', text)
+    return text.lower()
+
+def normalize_blocks(blocks):
+    for block in blocks:
+        block['normalized'] = normalize_text(block['text'])
+    return blocks
+
+
 
 def trova_prima_nota_per_pagina(interlinee: List[float],
                                 header_lines: int = 5,
