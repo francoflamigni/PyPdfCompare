@@ -544,7 +544,12 @@ def compare_pdf_files(pdf_path1: str, pdf_path2: str,
     # Confronta
     comparator = PDFComparator(similarity_threshold)
     result = comparator.match_lines(pages_text1c, pages_text2c)
-    return result, pages_text1c, pages_text2c
+    pages_text1d = [pages_text1c[r['doc1']] for r in result]
+    pages_text2d = [pages_text2c[r['doc2']] for r in result]
+    for i, r in enumerate(result):
+        r['doc1'] = i
+        r['doc2'] = i
+    return result, pages_text1d, pages_text2d
 
 
 def compare_pdf_texts(pages_text1: List[str], pages_text2: List[str],

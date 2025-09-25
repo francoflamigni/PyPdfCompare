@@ -297,8 +297,8 @@ def remove_notes(blocks):
             continue
         interlinea.append(blocks[i]['bbox'][1] - blocks[i - 1]['bbox'][1])
     page_star_line.append(len(blocks))
-    for i in range(len(interlinea)):
-        print(interlinea[i])
+    #for i in range(len(interlinea)):
+    #    print(interlinea[i])
 
     res = trova_prima_nota_per_pagina(interlinea)
     new_blocks = []

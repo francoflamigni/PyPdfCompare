@@ -1,114 +1,25 @@
 import sys
 import os
-import re
-import json
+
 import logging
-from datetime import datetime
-from typing import List, Tuple, Optional, Dict
+from typing import List
 import difflib
 import fitz
-from smart_compare import compare_pdf_texts, extract_pdf_text, compare_pdf_files
+from smart_compare import compare_pdf_files
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QTextEdit, QFileDialog,
-    QCheckBox, QGroupBox, QSplitter, QScrollArea, QFrame,
-    QSpinBox, QComboBox, QMessageBox, QProgressBar, QTabWidget,
-    QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
+    QGroupBox, QSplitter,
+    QMessageBox, QProgressBar, QStackedWidget
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QRectF
-from PyQt6.QtGui import (QFont, QTextCharFormat, QColor, QPixmap, QPainter,
-                         QTextCursor, QTextDocument, QSyntaxHighlighter, QTextFormat, QMouseEvent)
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import (QFont, QColor,
+                         QTextCursor, QMouseEvent)
 
 from config import ConfigWidget
-#from smart_segmentation import PDFTextSegmenter
-from pdf_viewer import PDFViewer
 
-
-class CustomTextEdit(QTextEdit):
-    lineClicked = pyqtSignal(int)
-    def __init__(self, parent=None):
-        super().__init__(parent)
-       # self.setPlainText("Riga 1\nRiga 2\nRiga 3\nRiga 4\nRiga 5")
-
-    def mousePressEvent(self, event: QMouseEvent):
-        # Chiama il metodo originale per mantenere il comportamento predefinito
-        super().mousePressEvent(event)
-
-        # Pulisce l'evidenziazione precedente se esiste
-        self.clear_highlight()
-
-        # Ottiene il cursore del testo nella posizione del clic
-        cursor = self.cursorForPosition(event.pos())
-
-        # Ottiene il numero del blocco (che corrisponde al numero della riga)
-        line_number = cursor.blockNumber()
-
-        # Evidenzia la nuova riga
-        self.highlight_line(cursor)
-        self.lineClicked.emit(line_number)
-
-        # Stampa il numero della riga (i blocchi sono indicizzati da 0)
-        print(f"Hai cliccato sulla riga: {line_number + 1}")
-
-    def highlight_and_scroll_to_line(self, line_number: int):
-        self.clear_highlight()
-        """
-        Scorre la QTextEdit fino alla riga specificata e la evidenzia.
-
-        Args:
-            line_number (int): Il numero della riga da visualizzare (base 1).
-        """
-        # 1. Pulire qualsiasi evidenziazione precedente
-        # Se hai una funzione per pulire l'evidenziazione, è meglio chiamarla qui.
-        # Ad esempio: self.clear_highlight()
-
-        # 2. Spostare il cursore alla riga desiderata
-        cursor = self.textCursor()
-
-        # Il numero del blocco è a base 0, quindi sottraiamo 1
-        target_block_number = line_number - 1
-
-        # Sposta il cursore al blocco (riga) specificato
-        cursor.movePosition(QTextCursor.MoveOperation.Start)
-        cursor.movePosition(QTextCursor.MoveOperation.NextBlock,
-                            QTextCursor.MoveMode.MoveAnchor,
-                            target_block_number)
-
-        # 3. Rendere il cursore visibile (scorrere la vista)
-        self.setTextCursor(cursor)
-        self.ensureCursorVisible()
-
-        # 4. Evidenziare la riga corrente
-        # Crea un formato per lo sfondo
-        format = QTextCharFormat()
-        format.setBackground(QColor("#d9eaff"))  # Un colore azzurro chiaro
-
-        # Seleziona l'intera riga
-        cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-
-        # Applica il formato
-        cursor.setCharFormat(format)
-
-    def clear_highlight(self):
-        # Resetta il formato di tutte le righe
-        cursor = self.textCursor()
-        cursor.select(QTextCursor.SelectionType.Document)
-        format = QTextCharFormat()
-        format.setBackground(QColor("transparent"))
-        cursor.mergeCharFormat(format)
-
-    def highlight_line(self, cursor: QTextCursor):
-        # Salva la posizione attuale per poterla ripulire successivamente
-        self.current_highlight_cursor = QTextCursor(cursor)
-
-        # Prepara il formato per l'evidenziazione
-        format = QTextCharFormat()
-        format.setBackground(QColor("#d9eaff"))  # Un colore azzurro chiaro
-
-        # Seleziona l'intera riga e applica il formato
-        cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-        cursor.setCharFormat(format)
+from pdf_txt_viewer import PdfTxtViewer
 
 
 def doc_page_count(path_file: str) -> int:
@@ -136,267 +47,283 @@ def doc_page_count(path_file: str) -> int:
         print(f"Si è verificato un errore: {e}")
         return -1
 
-class EnhancedDiffViewer(QWidget):
-    diffEvent = pyqtSignal(str, int)
-    diffEvent = pyqtSignal(str, int, int, int)
-    """Widget avanzato per visualizzare le differenze con PDF rendering e allineamento"""
+def map_index(original, norm, index):
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.setup_ui()
-        self.current_differences = []
-        self.current_page_index = 0
+    j = 0
+    for i in range(len(norm)):
+        if i >= index:
+            break
+        while norm[i] != original[j].lower() and j < len(original):
+            j += 1
+        j += 1
+    return j
 
-    def setup_ui(self):
-        main_layout = QVBoxLayout()
 
-        # Controlli di navigazione per le differenze
-        nav_layout = QHBoxLayout()
-        self.prev_diff_btn = QPushButton("◀ Diff Precedente")
-        self.next_diff_btn = QPushButton("Diff Successiva ▶")
-        self.diff_label = QLabel("Nessuna differenza")
-        self.sync_scroll_cb = QCheckBox("Sincronizza scroll")
-        self.sync_scroll_cb.setChecked(True)
 
-        nav_layout.addWidget(self.prev_diff_btn)
-        nav_layout.addWidget(self.diff_label)
-        nav_layout.addWidget(self.next_diff_btn)
-        nav_layout.addStretch()
-        nav_layout.addWidget(self.sync_scroll_cb)
+class txt_converter(QWidget):
+    def __init__(self):
+        statusUpdate = pyqtSignal(str)
+        super().__init__()
 
-        # Splitter principale per PDF e testo
-        main_splitter = QSplitter(Qt.Orientation.Vertical)
+        main_layout = QVBoxLayout(self)
+        self.create_file_section(main_layout)
 
-        # Area PDF (parte superiore)
-        pdf_widget = QWidget()
-        pdf_layout = QHBoxLayout(pdf_widget)
+        self.text_extraction = PdfTxtViewer(self)
+        self.text_extraction.clicEvent.connect(self.click_event)
+        main_layout.addWidget(self.text_extraction)
 
-        pdf_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.pdf_viewer1 = PDFViewer()
-        self.pdf_viewer1.mouse_click.connect(self.mouse_click)
-        self.pdf_viewer2 = PDFViewer()
+    def create_file_section(self, main_layout) -> QWidget:
+        """Crea la sezione per la selezione dei file"""
+        group = QGroupBox("📁 Selezione File PDF")
+        layout = QVBoxLayout()
 
-        pdf_frame1 = QFrame()
-        pdf_frame1.setFrameStyle(QFrame.Shape.Box)
-        pdf_layout1 = QVBoxLayout(pdf_frame1)
-        self.pdf_label1 = QLabel("PDF 1")
-        self.pdf_label1.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        pdf_layout1.addWidget(self.pdf_label1)
-        pdf_layout1.addWidget(self.pdf_viewer1)
+        # File 1
+        file_layout = QHBoxLayout()
+        file_layout.addWidget(QLabel("PDF 1:"))
+        self.pdf_path = QLineEdit()
+        self.pdf_path.setPlaceholderText("Seleziona il file PDF...")
+        self.pdf_browse = QPushButton("📂 Sfoglia...")
+        self.pdf_browse.clicked.connect(lambda: self.browse_file(self.pdf_path))
+        file_layout.addWidget(self.pdf_path, 3)
+        file_layout.addWidget(self.pdf_browse, 1)
+        main_layout.addLayout(file_layout)
 
-        pdf_frame2 = QFrame()
-        pdf_frame2.setFrameStyle(QFrame.Shape.Box)
-        pdf_layout2 = QVBoxLayout(pdf_frame2)
-        self.pdf_label2 = QLabel("PDF 2")
-        self.pdf_label2.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        pdf_layout2.addWidget(self.pdf_label2)
-        pdf_layout2.addWidget(self.pdf_viewer2)
+    def browse_file(self, line_edit: QLineEdit):
+        """Apre il dialog per selezionare un file PDF"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Seleziona file PDF", "", "File PDF (*.pdf);;Tutti i file (*)"
+        )
+        if file_path:
+            self.pdf_path.setText(file_path)
+            self.text_extraction.show_pdf(file_path)
+            self.text_extraction.clear_txt()
+            self.extract_text(file_path)
 
-        pdf_splitter.addWidget(pdf_frame1)
-        pdf_splitter.addWidget(pdf_frame2)
-        pdf_splitter.setStretchFactor(0, 1)
-        pdf_splitter.setStretchFactor(1, 1)
+    def click_event(self, ev, a1, a2, a3):
+        if not self.pages_block:
+            return
+        if ev == '1':
+            # clic sul text
+            l = self.pages_block[a1]
+            test_bbox = l['bbox']
+            current_page = l['page'] -1# (x0, y0, x1, y1)
+            test_color = QColor(255, 255, 0, 100)  # Giallo trasparente
+            self.text_extraction.highlight_pdf(current_page, test_bbox, test_color)
+            #self.diff_viewer.pdf_viewer1.highlight_text_line(current_page, test_bbox, test_color)
+        elif ev == '2':
+            # click sul pdf
+            if self.pages_block:
+                page = a3 + 1
+                for i, l in enumerate(self.pages_block):
+                    if l['page'] == page:
+                        if l['bbox'][1] <= a2 and l['bbox'][3] >= a2:
+                            self.text_extraction.highlight_txt(i + 1)
+                            #self.diff_viewer.left_text.highlight_and_scroll_to_line(i+1)
 
-        pdf_layout.addWidget(pdf_splitter)
+        a = 0
+    def extract_text(self, pdf_path):
+        '''
+            estrae il testo dal PDF
+        '''
 
-        # Area testo (parte inferiore)
-        text_widget = QWidget()
-        text_layout = QHBoxLayout(text_widget)
+        from pdf_processor import extract_text_lines_from_pdf, remove_notes
+        blocks = extract_text_lines_from_pdf(pdf_path)
+        self.pages_block = remove_notes(blocks)
 
-        text_splitter = QSplitter(Qt.Orientation.Horizontal)
+        pages_text = [t['text'].replace('\n', ' ') for t in self.pages_block]
+        for t in pages_text:
+            self.text_extraction.print_txt(t)
 
-        # Pannello sinistro (testo allineato)
-        left_frame = QFrame()
-        left_frame.setFrameStyle(QFrame.Shape.Box)
-        left_layout = QVBoxLayout(left_frame)
-        self.left_text_label = QLabel("Testo PDF 1 (Allineato)")
-        self.left_text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.left_text = CustomTextEdit()
-        self.left_text.lineClicked.connect(self.left_text_clicked)
-        self.left_text.setReadOnly(True)
-        self.left_text.setFont(QFont("Courier", 10))  # Font monospace
-        left_layout.addWidget(self.left_text_label)
-        left_layout.addWidget(self.left_text)
+class pdf_compare(QWidget):
+    statusUpdate = pyqtSignal(str)
 
-        # Pannello destro (testo allineato)
-        right_frame = QFrame()
-        right_frame.setFrameStyle(QFrame.Shape.Box)
-        right_layout = QVBoxLayout(right_frame)
-        self.right_text_label = QLabel("Testo PDF 2 (Allineato)")
-        self.right_text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.right_text = QTextEdit()
-        self.right_text.setReadOnly(True)
-        self.right_text.setFont(QFont("Courier", 10))  # Font monospace
-        right_layout.addWidget(self.right_text_label)
-        right_layout.addWidget(self.right_text)
+    def __init__(self):
+        super().__init__()
 
-        text_splitter.addWidget(left_frame)
-        text_splitter.addWidget(right_frame)
-        text_splitter.setStretchFactor(0, 1)
-        text_splitter.setStretchFactor(1, 1)
+        self.result = None # risultato della comparazione
+        self.txt1 = None # righe estratte dal documento 1
+        self.txt2 = None # righe estratte dal documento 2
 
-        text_layout.addWidget(text_splitter)
+        main_layout = QVBoxLayout(self)
 
-        # Aggiungi al main splitter
-        main_splitter.addWidget(pdf_widget)
-        main_splitter.addWidget(text_widget)
-        main_splitter.setStretchFactor(0, 2)  # PDF area più grande
-        main_splitter.setStretchFactor(1, 1)  # Text area più piccola
+        v1 = QVBoxLayout()
+        self.pdf_path1 = self.create_file_section(v1)
+        self.file1 = PdfTxtViewer(self)
+        self.file1.clicEvent.connect(self.click_event1)
+        v1.addWidget(self.file1)
+        w1 = QWidget()
+        w1.setLayout(v1)
 
-        # Connessioni
-        self.prev_diff_btn.clicked.connect(self.prev_difference)
-        self.next_diff_btn.clicked.connect(self.next_difference)
-        self.sync_scroll_cb.toggled.connect(self.toggle_sync_scroll)
 
-        main_layout.addLayout(nav_layout)
+        v2 = QVBoxLayout()
+        self.pdf_path2 = self.create_file_section(v2)
+        self.file2 = PdfTxtViewer(self)
+        self.file2.clicEvent.connect(self.click_event2)
+        v2.addWidget(self.file2)
+        w2 = QWidget()
+        w2.setLayout(v2)
+
+        main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        main_splitter.addWidget(w1)
+        main_splitter.addWidget(w2)
+        #self.text_extraction.clicEvent.connect(self.click_event)
         main_layout.addWidget(main_splitter)
-        self.setLayout(main_layout)
-
-        # Sincronizza scroll di default
         self.setup_scroll_sync()
 
-    def left_text_clicked(self, line):
-        self.diffEvent.emit('1', line, 0, 0)
+    def create_file_section(self, main_layout) -> QWidget:
+        """Crea la sezione per la selezione dei file"""
+        group = QGroupBox("📁 Selezione File PDF")
+        layout = QVBoxLayout()
 
-    def mouse_click(self, x, y, page):
-        self.diffEvent.emit('2', x, y, page)
+        # File 1
+        file_layout = QHBoxLayout()
+        file_layout.addWidget(QLabel("PDF 1:"))
+        pdf_path = QLineEdit()
+        pdf_path.setPlaceholderText("Seleziona il file PDF...")
+        pdf_browse = QPushButton("📂 Sfoglia...")
+        pdf_browse.clicked.connect(lambda: self.browse_file(pdf_path))
+        file_layout.addWidget(pdf_path, 3)
+        file_layout.addWidget(pdf_browse, 1)
+        main_layout.addLayout(file_layout)
+        return pdf_path
+
+    def browse_file(self, line_edit: QLineEdit):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Seleziona file PDF", "", "File PDF (*.pdf);;Tutti i file (*)"
+        )
+        if file_path:
+            line_edit.setText(file_path)
+            if line_edit == self.pdf_path1:
+                self.file1.show_pdf(file_path)
+            elif line_edit == self.pdf_path2:
+                self.file2.show_pdf(file_path)
+            if self.pdf_path1.text() and self.pdf_path2.text():
+                self.compare_files(self.pdf_path1.text(), self.pdf_path2.text())
 
     def setup_scroll_sync(self):
         """Configura la sincronizzazione dello scroll"""
-        left_scroll = self.left_text.verticalScrollBar()
-        right_scroll = self.right_text.verticalScrollBar()
+
+        left_scroll = self.file1.text_viewer.verticalScrollBar()
+        right_scroll = self.file2.text_viewer.verticalScrollBar()
 
         self.left_scroll_connection = left_scroll.valueChanged.connect(
-            lambda v: right_scroll.setValue(v) if self.sync_scroll_cb.isChecked() else None
-        )
+            lambda v: right_scroll.setValue(v)) # if self.sync_scroll_cb.isChecked() else None
+
         self.right_scroll_connection = right_scroll.valueChanged.connect(
-            lambda v: left_scroll.setValue(v) if self.sync_scroll_cb.isChecked() else None
-        )
+            lambda v: left_scroll.setValue(v)) # if self.sync_scroll_cb.isChecked() else None
 
-    def print_left(self, txt):
-        self.left_text.append(txt)
 
-    def print_right(self, txt):
-        self.right_text.append(txt)
-
-    def toggle_sync_scroll(self, enabled: bool):
-        """Attiva/disattiva la sincronizzazione dello scroll"""
-        # La sincronizzazione è già gestita nel setup_scroll_sync
-        pass
-
-    def show_differences(self, differences: List[dict], pdf1_path: str, pdf2_path: str):
-        """Mostra le differenze nei widget"""
-        self.current_differences = differences
-        self.current_page_index = 0
-
-        # Carica i PDF nei viewer
-        self.pdf_viewer1.load_pdf(pdf1_path)
-        self.pdf_viewer2.load_pdf(pdf2_path)
-
-        # Aggiorna le etichette
-        pdf1_name = os.path.basename(pdf1_path)
-        pdf2_name = os.path.basename(pdf2_path)
-        self.pdf_label1.setText(f"PDF 1: {pdf1_name}")
-        self.pdf_label2.setText(f"PDF 2: {pdf2_name}")
-        self.left_text_label.setText(f"Testo PDF 1: {pdf1_name} (Allineato)")
-        self.right_text_label.setText(f"Testo PDF 2: {pdf2_name} (Allineato)")
-
-        if not differences:
-            self.left_text.setPlainText("I file sono identici secondo la configurazione specificata.")
-            self.right_text.setPlainText("I file sono identici secondo la configurazione specificata.")
-            self.diff_label.setText("Nessuna differenza trovata")
-            self.prev_diff_btn.setEnabled(False)
-            self.next_diff_btn.setEnabled(False)
-        else:
-            self.update_difference_display()
-            self.update_navigation()
-
-    def update_difference_display(self):
-        """Aggiorna la visualizzazione della differenza corrente"""
-        if not self.current_differences:
+    def compare_files(self, pdf1, pdf2):
+        try:
+            fitz.open(pdf1).close()
+            fitz.open(pdf2).close()
+        except Exception as e:
+            QMessageBox.warning(self, "⚠️ Errore", f"Errore nell'apertura dei file PDF:\n{str(e)}")
             return
 
-        diff = self.current_differences[self.current_page_index]
-        page_num = diff['page']
+        # Disabilita il pulsante e mostra la progress bar
+        '''
+        self.compare_button.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        self.statusBar().showMessage("🔄 Confronto in corso...")
 
-        # Aggiorna i viewer PDF alla pagina corrente
-        self.pdf_viewer1.set_page(page_num - 1)
-        self.pdf_viewer2.set_page(page_num - 1)
+        self.tab_widget.setCurrentIndex(1)
+        '''
+        self.result, self.txt1, self.txt2 = compare_pdf_files(pdf1, pdf2)
+        for r in self.result:
+            t1 = self.txt1[r['doc1']]['text']
+            t2 = self.txt2[r['doc2']]['text']
+            score = r['score']
+            self.file1.print_txt(f'score {score:.2f}  {t1}')
+            self.file2.print_txt(f'{t2} ')
 
-        # Mostra il testo allineato con evidenziazione
-        left_text = '\n'.join(diff['aligned_lines1'])
-        right_text = '\n'.join(diff['aligned_lines2'])
+    def pdf_to_txt(self, pag, y, pages_block):
+        page = pag + 1
+        for i, l in enumerate(pages_block):
+            if l['page'] == page:
+                if l['bbox'][1] <= y and l['bbox'][3] >= y:
+                    return i + 1
+        return -1
 
-        self.left_text.setPlainText(left_text)
-        self.right_text.setPlainText(right_text)
-
-        # Applica evidenziazione delle differenze
-        self.highlight_differences(diff)
-
-    def highlight_differences(self, diff: dict):
-        """Evidenzia le differenze nel testo"""
-        # Evidenziazione per il pannello sinistro
-        left_cursor = self.left_text.textCursor()
-        left_cursor.select(QTextCursor.SelectionType.Document)
-        left_cursor.setCharFormat(QTextCharFormat())  # Reset formato
-
-        # Evidenziazione per il pannello destro
-        right_cursor = self.right_text.textCursor()
-        right_cursor.select(QTextCursor.SelectionType.Document)
-        right_cursor.setCharFormat(QTextCharFormat())  # Reset formato
-
-        # Applica evidenziazione per ogni blocco di differenze
-        for block in diff.get('diff_blocks', []):
-            if block.block_type == 'equal':
-                continue
-
-            # Formato di evidenziazione
-            format = QTextCharFormat()
-            if block.block_type == 'delete':
-                format.setBackground(QColor(255, 200, 200))  # Rosso chiaro
-            elif block.block_type == 'insert':
-                format.setBackground(QColor(200, 255, 200))  # Verde chiaro
-            elif block.block_type == 'replace':
-                format.setBackground(QColor(255, 255, 200))  # Giallo chiaro
-
-            # Applica formato (implementazione semplificata)
-            # In una versione più completa, si dovrebbe tracciare le posizioni esatte
-
-    def update_navigation(self):
-        """Aggiorna i controlli di navigazione"""
-        if not self.current_differences:
-            return
-
-        total_diffs = len(self.current_differences)
-        current_page = self.current_differences[self.current_page_index]['page']
-
-        self.diff_label.setText(f"Differenza {self.current_page_index + 1}/{total_diffs} (Pagina {current_page})")
-
-        self.prev_diff_btn.setEnabled(self.current_page_index > 0)
-        self.next_diff_btn.setEnabled(self.current_page_index < total_diffs - 1)
-
-    def prev_difference(self):
-        """Va alla differenza precedente"""
-        if self.current_page_index > 0:
-            self.current_page_index -= 1
-            self.update_difference_display()
-            self.update_navigation()
-
-    def next_difference(self):
-        """Va alla differenza successiva"""
-        if self.current_page_index < len(self.current_differences) - 1:
-            self.current_page_index += 1
-            self.update_difference_display()
-            self.update_navigation()
-
-    def show_pdf(self, pdf, pos):
-        if pos == 0:
-            self.pdf_viewer1.load_pdf(pdf)
+    def txt_to_pdf(self, line, idx):
+        pages_block = self.txt1 if idx == 0 else self.txt2
+        '''
+        if idx == 0:
+            pages_block = self.txt1
         else:
-            self.pdf_viewer2.load_pdf(pdf)
+            pages_block = self.txt2
+        '''
+        l = pages_block[line]
+        text_bbox = l['bbox']
+        current_page = l['page'] - 1
+        return current_page, text_bbox
 
 
+    def click_event1(self, ev, a1, a2, a3):
+        offset = 12
+        r = a1
+        if ev == '1' and self.result:
+            l0 = self.result[a1]
+            #r = l0['doc1']
+            r1 = r #l0['doc2']
+            diff = l0['diff']
+            icol = 0
+            self.file1.text_viewer.clear_highlight()
+            self.file2.text_viewer.clear_highlight()
+            if diff:
+                mes = [f"{df['operation']} {df['text1']} : {df['text2']}" for df in diff]
+                self.statusUpdate.emit(', '.join(mes))
+                for df in diff:
+                    if df['operation'] == 'replace':
+                        p0 = df['position1'][0]
+                        count0 = df['position1'][1] - p0
+                        p0 = map_index(self.txt1[r]['text'], self.txt1[r]['normalized'], p0)
 
+                        p1 = df['position2'][0]
+                        count1 = df['position2'][1] - p1
+                        p1 = map_index(self.txt2[r1]['text'], self.txt2[r1]['normalized'], p1)
+
+                        self.file1.text_viewer.highlight_character_at(a1, p0 + offset, count0, icol)
+                        self.file2.text_viewer.highlight_character_at(a1, p1, count1, icol)
+                        icol += 1
+            #evidenzia pdf
+            self.click_event(ev, r, a2, a3, 0)
+            self.click_event(ev, r1, a2, a3, 1)
+        else:
+            # clic su pdf a1 = x, a2 = y, a3 = pag
+            self.click_event(ev, a1, a2, a3, 0)
+
+    def click_event2(self, ev, a1, a2, a3):
+        self.click_event(ev, a1, a2, a3, 1)
+
+    def click_event(self, ev, a1, a2, a3, idx):
+        if idx == 0:
+            cnt = self.file1
+            pages_block = self.txt1
+        else:
+            cnt = self.file2
+            pages_block = self.txt2
+
+        if not pages_block:
+            return
+        if ev == '1':
+            current_page, bbox = self.txt_to_pdf(a1, idx)
+            color = QColor(255, 255, 0, 100)  # Giallo trasparente
+            cnt.highlight_pdf(current_page, bbox, color)
+
+        elif ev == '2':
+            # click sul pdf
+            line = self.pdf_to_txt(a3, a2, pages_block)
+            cnt.highlight_txt(line)
+            current_page, bbox = self.txt_to_pdf(line-1, idx)
+            cnt.highlight_pdf(current_page, bbox, QColor(255, 255, 0, 100))
+
+            idx1 = (idx +1) % 2
+            cnt1 = self.file2 if cnt == self.file1 else self.file1
+            current_page, bbox = self.txt_to_pdf(line-1, idx1)
+            cnt1.highlight_pdf(current_page, bbox, QColor(255, 255, 0, 100))
+            cnt1.highlight_txt(line)
 
 
 class PDFCompareApp(QMainWindow):
@@ -429,21 +356,15 @@ class PDFCompareApp(QMainWindow):
 
         main_layout = QVBoxLayout(central_widget)
 
-        # Sezione selezione file
-        file_section = self.create_file_section()
-        main_layout.addWidget(file_section)
-
         # Tab widget per configurazione e risultati
-        self.tab_widget = QTabWidget()
+        self.tab_widget = QStackedWidget()
 
-        # Tab configurazione
-        self.config_widget = ConfigWidget()
-        self.tab_widget.addTab(self.config_widget, "⚙️ Configurazione")
+        self.text_extraction = txt_converter()
+        self.tab_widget.addWidget(self.text_extraction)
 
-        # Tab risultati avanzato
-        self.diff_viewer = EnhancedDiffViewer(self)
-        self.diff_viewer.diffEvent.connect(self.diff_event)
-        self.tab_widget.addTab(self.diff_viewer, "📊 Risultati Side-by-Side")
+        self.file_compare = pdf_compare()
+        self.file_compare.statusUpdate.connect(self.statusBarMes)
+        self.tab_widget.addWidget(self.file_compare)
 
         main_layout.addWidget(self.tab_widget)
 
@@ -464,6 +385,12 @@ class PDFCompareApp(QMainWindow):
 
         # Menu File
         file_menu = menubar.addMenu('File')
+
+        txt_converter_action = file_menu.addAction('Converte in TXT')
+        txt_converter_action.triggered.connect(self.show_text_convert)
+
+        pdf_compare_action = file_menu.addAction('Confronta PDF')
+        pdf_compare_action.triggered.connect(self.show_pdf_compare)
 
         open_action = file_menu.addAction('Apri Log Precedente')
         open_action.triggered.connect(self.open_previous_log)
@@ -493,6 +420,16 @@ class PDFCompareApp(QMainWindow):
         about_action = help_menu.addAction('Informazioni')
         about_action.triggered.connect(self.show_about)
 
+    def show_text_convert(self):
+        self.tab_widget.setCurrentIndex(0)
+
+    def show_pdf_compare(self):
+        self.tab_widget.setCurrentIndex(1)
+
+    def statusBarMes(self, message):
+        self.statusBar().showMessage(message)
+
+    '''
     def create_file_section(self) -> QWidget:
         """Crea la sezione per la selezione dei file"""
         group = QGroupBox("📁 Selezione File PDF")
@@ -553,8 +490,9 @@ class PDFCompareApp(QMainWindow):
 
         group.setLayout(layout)
         return group
+    '''
 
-
+    '''
     def browse_file(self, line_edit: QLineEdit):
         """Apre il dialog per selezionare un file PDF"""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -563,14 +501,19 @@ class PDFCompareApp(QMainWindow):
         if file_path:
             line_edit.setText(file_path)
             if line_edit == self.pdf1_path:
-                self.diff_viewer.show_pdf(file_path, 0)
+                self.text_extraction.show_pdf(file_path)
+                self.text_extraction.clear_txt()
+                self.extract_text(file_path)
+                #self.diff_viewer.show_pdf(file_path, 0)
+               
                 n_pages = doc_page_count(file_path)
                 if n_pages > 0:
                     self.config_widget.sync_page_limits(1, n_pages)
+                
             else:
                 self.diff_viewer.show_pdf(file_path, 1)
 
-    def diff_event(self, ev, a1, a2, a3):
+    def click_event(self, ev, a1, a2, a3):
         if not self.pages_block:
             return
         if ev == '1':
@@ -578,17 +521,20 @@ class PDFCompareApp(QMainWindow):
             test_bbox = l['bbox']
             current_page = l['page'] -1# (x0, y0, x1, y1)
             test_color = QColor(255, 255, 0, 100)  # Giallo trasparente
-            self.diff_viewer.pdf_viewer1.highlight_text_line(current_page, test_bbox, test_color)
+            self.text_extraction.highlight_pdf(current_page, test_bbox, test_color)
+            #self.diff_viewer.pdf_viewer1.highlight_text_line(current_page, test_bbox, test_color)
         elif ev == '2':
+            # click sul pdf
             if self.pages_block:
                 page = a3 + 1
                 for i, l in enumerate(self.pages_block):
                     if l['page'] == page:
                         if l['bbox'][1] <= a2 and l['bbox'][3] >= a2:
-                            self.diff_viewer.left_text.highlight_and_scroll_to_line(i+1)
+                            self.text_extraction.highlight_txt(i + 1)
+                            #self.diff_viewer.left_text.highlight_and_scroll_to_line(i+1)
 
         a = 0
-
+    '''
     def clear_files(self):
         """Pulisce i campi di selezione file"""
         self.pdf1_path.clear()
@@ -597,6 +543,7 @@ class PDFCompareApp(QMainWindow):
         self.diff_viewer.left_text.clear()
         self.pages_block = None
 
+    """
     def extract_text(self, pdf_path):
         '''
             estrae il testo dal PDF
@@ -608,7 +555,12 @@ class PDFCompareApp(QMainWindow):
 
         pages_text = [t['text'].replace('\n', ' ') for t in self.pages_block]
         for t in pages_text:
-            self.diff_viewer.print_left(t)
+            self.text_extraction.print_txt(t)
+
+        #self.diff_viewer.left_text.highlight_character_at(5, 7, 4)
+        #self.diff_viewer.left_text.highlight_character_at(75, 2, 7)
+
+    """
 
     def start_comparison(self):
         """Avvia il confronto dei PDF"""

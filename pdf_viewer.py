@@ -137,7 +137,7 @@ class PDFViewer(QWidget):
         # Area di scroll per il PDF
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.scroll_area.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
         # Widget per la pagina PDF
         self.pdf_page_widget = PDFPageWidget()
@@ -154,9 +154,11 @@ class PDFViewer(QWidget):
         layout = QHBoxLayout()
 
         # Pulsante per aprire PDF
+        '''
         self.open_btn = QPushButton("Apri PDF")
         self.open_btn.clicked.connect(self.open_pdf)
         layout.addWidget(self.open_btn)
+        '''
 
         layout.addWidget(QLabel("Pagina:"))
 
@@ -200,14 +202,6 @@ class PDFViewer(QWidget):
 
         # Pulsanti per evidenziazioni di test
         layout.addWidget(QLabel("|"))
-
-        self.highlight_btn = QPushButton("Evidenzia Test")
-        self.highlight_btn.clicked.connect(self.add_test_highlight)
-        layout.addWidget(self.highlight_btn)
-
-        self.clear_btn = QPushButton("Pulisci")
-        self.clear_btn.clicked.connect(self.clear_highlights)
-        layout.addWidget(self.clear_btn)
 
         layout.addStretch()
         toolbar.setLayout(layout)
@@ -292,9 +286,7 @@ class PDFViewer(QWidget):
         self.zoom_slider.setEnabled(enabled)
 
         # Controlli di evidenziazione
-        self.highlight_btn.setEnabled(enabled)
         self.scroll_to_btn.setEnabled(enabled)
-        self.clear_btn.setEnabled(enabled)
 
         # Pulsante chiudi PDF
         self.close_btn.setEnabled(enabled)
@@ -334,6 +326,7 @@ class PDFViewer(QWidget):
         if self.pdf_document:
             self.current_page = page_num - 1
             self.display_page()
+            self.page_spinbox.setValue(self.current_page + 1)
 
     def zoom_in(self):
         """Aumenta lo zoom"""
@@ -361,11 +354,11 @@ class PDFViewer(QWidget):
             color: QColor per l'evidenziazione (default: giallo trasparente)
         """
         if self.pdf_document is None:
-            print("Nessun PDF caricato")
+            #print("Nessun PDF caricato")
             return
 
         if page_num < 0 or page_num >= len(self.pdf_document):
-            print(f"Numero pagina non valido: {page_num}")
+            #print(f"Numero pagina non valido: {page_num}")
             return
 
         # Aggiungi l'highlight al dizionario della pagina specifica
